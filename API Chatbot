@@ -1,0 +1,524 @@
+import os
+import time
+import tempfile
+
+import streamlit as st
+import faiss
+
+from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
+from google import genai
+from streamlit_mic_recorder import speech_to_text
+from gtts import gTTS
+
+
+# ==========================================
+# PAGE CONFIGURATION
+# ==========================================
+
+st.set_page_config(
+    page_title="Travel Planner RAG Assistant",
+    page_icon="✈️",
+    layout="wide"
+)
+
+
+# ==========================================
+# LOAD API KEY
+# ==========================================
+
+load_dotenv()
+
+API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not API_KEY:
+
+    st.error("❌ Gemini API key not found.")
+
+    st.info(
+        "Create a .env file inside the project folder "
+        "and add:\n\n"
+        "GEMINI_API_KEY=YOUR_API_KEY"
+    )
+
+    st.stop()
+
+
+# ==========================================
+# GEMINI CLIENT
+# ==========================================
+
+client = genai.Client(
+    api_key=API_KEY
+)
+
+
+# ==========================================
+# LOAD TRAVEL DATA
+# ==========================================
+
+try:
+
+    with open(
+        "travel_data.txt",
+        "r",
+        encoding="utf-8"
+    ) as file:
+
+        travel_text = file.read()
+
+except FileNotFoundError:
+
+    st.error(
+        "❌ travel_data.txt not found."
+    )
+
+    st.info(
+        "Make sure travel_data.txt is inside "
+        "the Travel_Planner_RAG folder."
+    )
+
+    st.stop()
+
+
+# ==========================================
+# CREATE TEXT CHUNKS
+# ==========================================
+
+def create_chunks(
+    text,
+    chunk_size=500
+):
+
+    words = text.split()
+
+    chunks = []
+
+    for i in range(
+        0,
+        len(words),
+        chunk_size
+    ):
+
+        chunk = " ".join(
+            words[i:i + chunk_size]
+        )
+
+        if chunk.strip():
+
+            chunks.append(chunk)
+
+    return chunks
+
+
+chunks = create_chunks(
+    travel_text
+)
+
+
+# ==========================================
+# EMBEDDING MODEL
+# ==========================================
+
+@st.cache_resource
+def load_embedding_model():
+
+    return SentenceTransformer(
+        "all-MiniLM-L6-v2"
+    )
+
+
+embedding_model = load_embedding_model()
+
+
+# ==========================================
+# FAISS VECTOR DATABASE
+# ==========================================
+
+@st.cache_resource
+def create_vector_database(chunks):
+
+    embeddings = embedding_model.encode(
+        chunks,
+        convert_to_numpy=True
+    )
+
+    embeddings = embeddings.astype(
+        "float32"
+    )
+
+    dimension = embeddings.shape[1]
+
+    index = faiss.IndexFlatL2(
+        dimension
+    )
+
+    index.add(embeddings)
+
+    return index
+
+
+vector_db = create_vector_database(
+    chunks
+)
+
+
+# ==========================================
+# RETRIEVE RELEVANT DOCUMENTS
+# ==========================================
+
+def retrieve_documents(
+    question,
+    top_k=3
+):
+
+    question_embedding = (
+        embedding_model.encode(
+            [question],
+            convert_to_numpy=True
+        )
+    )
+
+    question_embedding = (
+        question_embedding.astype(
+            "float32"
+        )
+    )
+
+    distances, indices = (
+        vector_db.search(
+            question_embedding,
+            top_k
+        )
+    )
+
+    retrieved_chunks = []
+
+    for index in indices[0]:
+
+        if index < len(chunks):
+
+            retrieved_chunks.append(
+                chunks[index]
+            )
+
+    return retrieved_chunks
+
+
+# ==========================================
+# GEMINI RESPONSE
+# ==========================================
+
+def ask_gemini(
+    question,
+    context
+):
+
+    prompt = f"""
+You are an intelligent Travel Planner Assistant.
+
+Use the following travel information to answer
+the user's question.
+
+Travel Information:
+{context}
+
+User Question:
+{question}
+
+Instructions:
+- Use the provided travel information as the main source.
+- Do not invent information that is not supported by the context.
+- Give a clear and useful answer.
+- Use bullet points when useful.
+- For itinerary questions, organize the answer by day.
+"""
+
+    for attempt in range(3):
+
+        try:
+
+            response = client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=prompt
+            )
+
+            # Check Gemini response
+            if response.text:
+
+                return response.text
+
+            return (
+                "❌ Gemini did not generate an answer."
+            )
+
+        except Exception as e:
+
+            error_message = str(e)
+
+            # Retry temporary server errors
+            if (
+                "503" in error_message
+                or "UNAVAILABLE" in error_message
+            ):
+
+                if attempt < 2:
+
+                    time.sleep(5)
+
+                    continue
+
+            return (
+                "❌ Gemini Error:\n\n"
+                + error_message
+            )
+
+
+# ==========================================
+# TEXT TO SPEECH
+# ==========================================
+
+def speak_answer(text):
+
+    try:
+
+        tts = gTTS(
+            text=text,
+            lang="en"
+        )
+
+        audio_file = tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".mp3"
+        )
+
+        tts.save(
+            audio_file.name
+        )
+
+        return audio_file.name
+
+    except Exception as e:
+
+        return None
+
+
+# ==========================================
+# TITLE
+# ==========================================
+
+st.markdown(
+    """
+    <h1 style="text-align:center;">
+    ✈️ Travel Planner RAG Assistant
+    </h1>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    """
+    <p style="text-align:center;">
+    🎤 Voice + Text Travel Planning using
+    RAG and Gemini LLM
+    </p>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ==========================================
+# SIDEBAR
+# ==========================================
+
+with st.sidebar:
+
+    st.header("🌍 Travel Assistant")
+
+    st.write(
+        "Ask travel questions using "
+        "text or voice."
+    )
+
+    st.subheader(
+        "💬 Example Questions"
+    )
+
+    st.write(
+        "• Plan a 3-day trip to Ooty"
+    )
+
+    st.write(
+        "• What are the best places in Chennai?"
+    )
+
+    st.write(
+        "• Compare Ooty and Munnar"
+    )
+
+    st.write(
+        "• What is the best time to visit Goa?"
+    )
+
+    st.write(
+        "• What food should I try in Chennai?"
+    )
+
+
+# ==========================================
+# CHAT HISTORY
+# ==========================================
+
+if "messages" not in st.session_state:
+
+    st.session_state.messages = []
+
+
+for message in st.session_state.messages:
+
+    with st.chat_message(
+        message["role"]
+    ):
+
+        st.markdown(
+            message["content"]
+        )
+
+
+# ==========================================
+# VOICE INPUT
+# ==========================================
+
+st.subheader(
+    "🎤 Ask using your voice"
+)
+
+voice_text = speech_to_text(
+    language="en",
+    start_prompt="🎤 Start Recording",
+    stop_prompt="⏹️ Stop Recording",
+    just_once=True,
+    use_container_width=True
+)
+
+
+# ==========================================
+# TEXT INPUT
+# ==========================================
+
+text_question = st.chat_input(
+    "Or type your travel question..."
+)
+
+
+# ==========================================
+# SELECT QUESTION
+# ==========================================
+
+user_question = None
+
+if voice_text:
+
+    user_question = voice_text
+
+elif text_question:
+
+    user_question = text_question
+
+
+# ==========================================
+# PROCESS QUESTION
+# ==========================================
+
+if user_question:
+
+    # Add user question
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": user_question
+        }
+    )
+
+    with st.chat_message("user"):
+
+        st.markdown(
+            user_question
+        )
+
+
+    # ======================================
+    # RAG RETRIEVAL
+    # ======================================
+
+    retrieved_docs = retrieve_documents(
+        user_question,
+        top_k=3
+    )
+
+    context = "\n\n".join(
+        retrieved_docs
+    )
+
+
+    # ======================================
+    # GEMINI RESPONSE
+    # ======================================
+
+    with st.chat_message("assistant"):
+
+        with st.spinner(
+            "✈️ Planning your trip..."
+        ):
+
+            answer = ask_gemini(
+                user_question,
+                context
+            )
+
+            st.markdown(
+                answer
+            )
+
+
+            # ==================================
+            # TEXT TO SPEECH
+            # ==================================
+
+            if not answer.startswith(
+                "❌ Gemini Error"
+            ):
+
+                with st.spinner(
+                    "🔊 Creating voice..."
+                ):
+
+                    audio_path = speak_answer(
+                        answer
+                    )
+
+                if audio_path:
+
+                    st.audio(
+                        audio_path,
+                        format="audio/mp3"
+                    )
+
+                else:
+
+                    st.warning(
+                        "⚠️ Voice output could not be generated."
+                    )
+
+
+    # ======================================
+    # SAVE ASSISTANT RESPONSE
+    # ======================================
+
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": answer
+        }
+    )
+
