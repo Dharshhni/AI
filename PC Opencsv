@@ -1,0 +1,346 @@
+import os
+import time
+import subprocess
+import webbrowser
+import datetime
+from pathlib import Path
+from urllib.parse import quote
+
+import sounddevice as sd
+import speech_recognition as sr
+import pyttsx3
+
+
+# =====================================
+# AI VOICE COMPUTER CONTROLLER
+# =====================================
+
+SAMPLE_RATE = 16000
+RECORD_SECONDS = 5
+
+recognizer = sr.Recognizer()
+speaker = pyttsx3.init()
+speaker.setProperty("rate", 170)
+
+
+def speak(message):
+    print("Assistant:", message)
+    speaker.say(message)
+    speaker.runAndWait()
+
+
+# =====================================
+# FIND INSTALLED APPLICATIONS
+# =====================================
+
+def find_application(app_name):
+    folders = [
+        Path(os.environ.get("APPDATA", ""))
+        / "Microsoft/Windows/Start Menu/Programs",
+
+        Path(os.environ.get("PROGRAMDATA", ""))
+        / "Microsoft/Windows/Start Menu/Programs"
+    ]
+
+    search_name = app_name.lower().strip()
+
+    for folder in folders:
+        if not folder.exists():
+            continue
+
+        try:
+            for shortcut in folder.rglob("*.lnk"):
+                shortcut_name = shortcut.stem.lower()
+
+                if (
+                    search_name == shortcut_name
+                    or search_name in shortcut_name
+                ):
+                    return shortcut
+
+        except (OSError, PermissionError):
+            continue
+
+    return None
+
+
+# =====================================
+# OPEN APPLICATIONS
+# =====================================
+
+def open_application(app_name):
+    name = app_name.lower().strip()
+
+    # Website shortcuts
+    websites = {
+        "google": "https://www.google.com",
+        "youtube": "https://www.youtube.com",
+        "gmail": "https://mail.google.com",
+        "chatgpt": "https://chatgpt.com",
+        "whatsapp": "https://web.whatsapp.com",
+        "facebook": "https://www.facebook.com",
+        "instagram": "https://www.instagram.com",
+        "github": "https://github.com",
+        "linkedin": "https://www.linkedin.com",
+        "google drive": "https://drive.google.com",
+        "google classroom": "https://classroom.google.com",
+        "google meet": "https://meet.google.com",
+        "google maps": "https://maps.google.com",
+        "google colab": "https://colab.research.google.com",
+        "canva": "https://www.canva.com",
+        "spotify": "https://open.spotify.com",
+        "netflix": "https://www.netflix.com",
+        "amazon": "https://www.amazon.in",
+        "wikipedia": "https://www.wikipedia.org"
+    }
+
+    # Built-in Windows applications
+    windows_apps = {
+        "notepad": ["notepad.exe"],
+        "calculator": ["calc.exe"],
+        "calc": ["calc.exe"],
+        "paint": ["mspaint.exe"],
+        "file explorer": ["explorer.exe"],
+        "explorer": ["explorer.exe"],
+        "task manager": ["taskmgr.exe"],
+        "command prompt": ["cmd.exe"],
+        "cmd": ["cmd.exe"],
+        "powershell": ["powershell.exe"],
+        "terminal": ["wt.exe"],
+        "control panel": ["control.exe"],
+        "snipping tool": ["snippingtool.exe"],
+        "magnifier": ["magnify.exe"],
+        "on screen keyboard": ["osk.exe"],
+        "character map": ["charmap.exe"]
+    }
+
+    # Application name aliases
+    aliases = {
+        "vscode": "visual studio code",
+        "vs code": "visual studio code",
+        "chrome browser": "google chrome",
+        "ms word": "word",
+        "microsoft word": "word",
+        "ms excel": "excel",
+        "microsoft excel": "excel",
+        "ms powerpoint": "powerpoint",
+        "microsoft powerpoint": "powerpoint"
+    }
+
+    name = aliases.get(name, name)
+
+    # Open websites
+    if name in websites:
+        webbrowser.open(websites[name])
+        speak("Opening " + app_name)
+        return
+
+    # Open Windows tools
+    if name in windows_apps:
+        try:
+            subprocess.Popen(windows_apps[name])
+            speak("Opening " + app_name)
+            return
+        except OSError:
+            pass
+
+    # Try finding the application in the Start Menu
+    shortcut = find_application(name)
+
+    if shortcut:
+        try:
+            os.startfile(str(shortcut))
+            speak("Opening " + app_name)
+            return
+        except OSError:
+            pass
+
+    # Try launching common applications directly
+    executable_names = {
+        "google chrome": "chrome",
+        "microsoft edge": "msedge",
+        "visual studio code": "code",
+        "word": "winword",
+        "excel": "excel",
+        "powerpoint": "powerpnt",
+        "outlook": "outlook",
+        "firefox": "firefox",
+        "vlc": "vlc"
+    }
+
+    executable = executable_names.get(name)
+
+    if executable:
+        try:
+            subprocess.Popen([executable])
+            speak("Opening " + app_name)
+            return
+        except OSError:
+            pass
+
+    speak("Application not found. Searching online.")
+    webbrowser.open(
+        "https://www.google.com/search?q="
+        + quote(app_name + " application")
+    )
+
+
+# =====================================
+# OPEN FOLDERS
+# =====================================
+
+def open_folder(folder_name):
+    folders = {
+        "downloads": Path.home() / "Downloads",
+        "documents": Path.home() / "Documents",
+        "desktop": Path.home() / "Desktop",
+        "pictures": Path.home() / "Pictures",
+        "music": Path.home() / "Music",
+        "videos": Path.home() / "Videos"
+    }
+
+    folder = folders.get(folder_name.lower().strip())
+
+    if folder and folder.exists():
+        os.startfile(str(folder))
+        speak("Opening " + folder_name)
+        return True
+
+    return False
+
+
+# =====================================
+# PROCESS VOICE COMMANDS
+# =====================================
+
+def process_command(command):
+    command = command.lower().strip()
+
+    print("You said:", command)
+
+    if not command:
+        return True
+
+    if command in [
+        "stop", "exit", "quit",
+        "stop assistant", "close assistant"
+    ]:
+        speak("Voice assistant stopped.")
+        return False
+
+    if command in ["help", "show commands"]:
+        speak(
+            "Say open followed by an application name. "
+            "You can also say search for a topic, "
+            "what time is it, or stop assistant."
+        )
+        return True
+
+    if command.startswith("open "):
+        target = command[5:].strip()
+
+        if not open_folder(target):
+            open_application(target)
+
+        return True
+
+    if command.startswith("search for "):
+        query = command[len("search for "):].strip()
+
+        webbrowser.open(
+            "https://www.google.com/search?q=" + quote(query)
+        )
+
+        speak("Searching for " + query)
+        return True
+
+    if command.startswith("search "):
+        query = command[len("search "):].strip()
+
+        webbrowser.open(
+            "https://www.google.com/search?q=" + quote(query)
+        )
+
+        speak("Searching for " + query)
+        return True
+
+    if "time" in command:
+        current_time = datetime.datetime.now().strftime("%I:%M %p")
+        speak("The time is " + current_time)
+        return True
+
+    if "date" in command or "today" in command:
+        current_date = datetime.datetime.now().strftime("%d %B %Y")
+        speak("Today's date is " + current_date)
+        return True
+
+    speak("Command not recognized. Say open followed by an application name.")
+    return True
+
+
+# =====================================
+# LISTEN TO MICROPHONE
+# =====================================
+
+def listen():
+    try:
+        print("\nListening... Speak now.")
+
+        recording = sd.rec(
+            int(RECORD_SECONDS * SAMPLE_RATE),
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype="int16"
+        )
+
+        sd.wait()
+
+        audio = sr.AudioData(
+            recording.tobytes(),
+            SAMPLE_RATE,
+            2
+        )
+
+        command = recognizer.recognize_google(
+            audio,
+            language="en-IN"
+        )
+
+        return command
+
+    except sr.UnknownValueError:
+        print("Sorry, I could not understand. Try again.")
+
+    except sr.RequestError as error:
+        print("Speech recognition error:", error)
+        speak("Check your internet connection.")
+
+    except Exception as error:
+        print("Microphone error:", error)
+        speak("Check your microphone permissions.")
+
+    return ""
+
+
+# =====================================
+# MAIN PROGRAM
+# =====================================
+
+def main():
+    speak(
+        "AI Voice Computer Controller started. "
+        "Say open followed by an application name."
+    )
+
+    while True:
+        command = listen()
+
+        if command:
+            if not process_command(command):
+                break
+
+        time.sleep(0.3)
+
+
+if __name__ == "__main__":
+    main()
